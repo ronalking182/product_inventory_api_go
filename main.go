@@ -1,13 +1,14 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"net/http"
+	// "encoding/json"
+	// "fmt"
+	// "net/http"
 	"strconv"
-	"time"
+	// "time"
 
-	"github.com/gorilla/mux"
+	// "github.com/gorilla/mux"
+	"github.com/gofiber/fiber/v2"
 )
 
 type Product struct {
@@ -19,92 +20,78 @@ type Product struct {
 
 var products []Product
 
-func createProduct(w http.ResponseWriter, r *http.Request) {
-	var product Product
-	err := json.NewDecoder(r.Body).Decode(&product)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	} else {
-		fmt.Fprintf(w, "Product:", product)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(product)
-		products = append(products, product)
+func createProduct(c *fiber.Ctx) error {
+	var newProduct Product
+	if err := c.BodyParser(&newProduct); err != nil {
+		c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
+	products = append(products, newProduct)
+
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"message": "Product created successfully",
+		"product": newProduct,
+	})
 }
 
-func getProduct(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	err := json.NewEncoder(w).Encode(products)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	} else {
-		fmt.Fprintln(w, "All products fetched successfully")
-		fmt.Fprintln(w, products)
-	}
-	w.WriteHeader(http.StatusOK)
+func getProduct(c *fiber.Ctx) error {
+	return c.JSON(products)
 }
 
-func updateProduct(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	id, _ := strconv.Atoi(vars["id"])
-
-	var updatedProduct Product
-	err := json.NewDecoder(r.Body).Decode(&updatedProduct)
+func getProductById(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-	} else {
-		found := false
-		for index, singleProduct := range products {
-			if singleProduct.Id == id {
-				found = true
-				products[index].Name = updatedProduct.Name
-				products[index].Description = updatedProduct.Description
-				products[index].Price = updatedProduct.Price
-			}
+		fiber.NewError(404, err.Error())
+	}
+
+	for _, product := range products {
+		if product.Id == id {
+			return c.JSON(product)
 		}
-		if !found {
-			http.NotFound(w, r)
-			return
-		}
-
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(products)
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Product with ID %d updated successfully", id)
-
+	return c.Status(fiber.StatusNotFound).SendString("product not found")
 }
 
-func deleteProduct(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	id, _ := strconv.Atoi(vars["id"])
+func updateProduct(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return fiber.NewError(fiber.ErrBadRequest.Code, "Invalid product ID")
+	}
+
 	found := false
-	var itemToDelete Product
-	err := json.NewDecoder(r.Body).Decode(&itemToDelete)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	} else {
-		for index, singleProduct := range products {
-			if singleProduct.Id == id {
-				found = true
-				products = append(products[:index], products[index+1:]...)
-				break
+	for index, product := range products {
+		if product.Id == id {
+			found = true
+			products[index].Name = c.FormValue("name")
+			products[index].Description = c.FormValue("description")
+			price, err := strconv.ParseFloat(c.FormValue("price"), 64)
+			if err != nil {
+				return fiber.NewError(fiber.StatusBadRequest, err.Error())
 			}
+			products[index].Price = price
 		}
 	}
 	if !found {
-		http.NotFound(w, r)
-		return
-	} else {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(products)
-		w.WriteHeader(http.StatusOK)
+		return fiber.NewError(404, "Not Found")
+
 	}
+
+	return fiber.NewError(404, "Can Update Product")
+}
+
+func deleteProduct(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+
+	}
+	for i, product := range products {
+		if product.Id == id {
+			products = append(products[:i], products[i+1:]...)
+			return c.SendString("Product Deleted")
+		}
+	}
+
+	return fiber.NewError(fiber.StatusNotFound, "Product not found")
 }
 
 type Response struct {
@@ -112,37 +99,25 @@ type Response struct {
 	Status  int    `json:"status"`
 }
 
-func handleError(w http.ResponseWriter, r *http.Request) {
+func handleError(c *fiber.Ctx) error {
 	response := Response{
 		Message: "An error occurred",
-		Status:  http.StatusInternalServerError,
+		Status:  fiber.StatusInternalServerError,
 	}
-	json.NewEncoder(w).Encode(&response)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(response.Status)
+	return c.Status(response.Status).JSON(response)
 }
 
 func main() {
-	mux := mux.NewRouter()
-	mux.HandleFunc("/products", createProduct).Methods("POST")
-	mux.HandleFunc("/products", getProduct).Methods("GET")
-	mux.HandleFunc("/products/{id}", updateProduct).Methods("PUT")
-	mux.HandleFunc("/products/{id}", deleteProduct).Methods("DELETE")
-	mux.HandleFunc("/error", handleError).Methods("GET")
+	// mux := mux.NewRouter()
+	app := fiber.New()
 
-	server := &http.Server{
-		Addr:         ":8080",
-		Handler:      mux.StrictSlash(true),
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  20 * time.Second,
-	}
+	app.Post("/products", createProduct)
+	app.Get("/products", getProduct)
+	app.Get("/products/:id", getProductById)
+	app.Put("/products", updateProduct)
+	app.Delete("/products", deleteProduct)
+	app.Get("/products", handleError)
 
-	err := server.ListenAndServe()
-	if err != nil {
-		fmt.Printf("Error starting server: %v\n", err)
-		return
-	} else {
-		fmt.Println("Server started successfully on port 8080")
-	}
+	app.Listen(":8080")
+
 }
